@@ -11,7 +11,7 @@ video footage.
 
 The recorded videos will be in `test` folder under the sdcard.
 
-The recorded video is like this:
+The recorded video is like this (no status bar and nav bar):
 
 ![Sample](https://github.com/junyuecao/private-static/blob/master/recorder-sample.gif?raw=true)
 
