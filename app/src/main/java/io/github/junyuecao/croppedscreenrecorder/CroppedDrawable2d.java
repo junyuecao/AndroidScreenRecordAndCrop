@@ -9,8 +9,7 @@ import java.nio.FloatBuffer;
 
 
 /**
- * Tweaked version of Drawable2d that rescales the texture coordinates to provide a
- * "zoom" effect.
+ * Tweaked version of Drawable2d that crop the texture coordinates.
  */
 public class CroppedDrawable2d extends Drawable2d {
     private static final String TAG = "CroppedDrawable2d";
