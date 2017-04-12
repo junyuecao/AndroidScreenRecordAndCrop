@@ -220,8 +220,8 @@ public class ScreenCapture {
     @NonNull
     private File getFile() {
         File file = new File(Environment.getExternalStorageDirectory() + File.separator + "test", System.currentTimeMillis() + ".mp4");
-        if (!file.exists()) {
-            file.mkdirs();
+        if (!file.getParentFile().exists()) {
+            file.getParentFile().mkdirs();
         }
         return file;
     }
