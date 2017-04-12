@@ -34,7 +34,6 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
 
-
 /**
  * Encode a movie from frames rendered from an external texture image.
  * <p>
@@ -55,9 +54,9 @@ import java.lang.ref.WeakReference;
  * <li>call TextureMovieEncoder#startRecording() with the config
  * <li>call TextureMovieEncoder#setTextureId() with the texture object that receives frames
  * <li>for each frame, after latching it with SurfaceTexture#updateTexImage(),
- *     call TextureMovieEncoder#frameAvailable().
+ * call TextureMovieEncoder#frameAvailable().
  * </ul>
- *
+ * <p>
  * TODO: tweak the API (esp. textureId) so it's less awkward for simple use cases.
  */
 @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
@@ -70,9 +69,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
     private static final int MSG_FRAME_AVAILABLE = 2;
     private static final int MSG_SET_TEXTURE_ID = 3;
     private static final int MSG_UPDATE_SHARED_CONTEXT = 4;
-    private static final int MSG_UPDATE_TEX_IMAGE = 5;
-    private static final int MSG_QUIT = 6;
-
+    private static final int MSG_QUIT = 5;
 
     // ----- accessed exclusively by encoder thread -----
     private WindowSurface mInputWindowSurface;
@@ -85,7 +82,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
     // ----- accessed by multiple threads -----
     private volatile EncoderHandler mHandler;
 
-    private Object mReadyFence = new Object();      // guards ready/running
+    private final Object mReadyFence = new Object();      // guards ready/running
     private boolean mReady;
     private boolean mRunning;
     private Callback mCallback;
@@ -120,7 +117,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      */
     public void startRecording(EncoderConfig config) {
         Log.d(TAG, "Encoder: startRecording()");
-        synchronized (mReadyFence) {
+        synchronized(mReadyFence) {
             if (mRunning) {
                 Log.w(TAG, "Encoder thread already running");
                 return;
@@ -160,7 +157,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      * Returns true if recording has been started.
      */
     public boolean isRecording() {
-        synchronized (mReadyFence) {
+        synchronized(mReadyFence) {
             return mRunning;
         }
     }
@@ -186,7 +183,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      * stall the caller while this thread does work.
      */
     public void frameAvailable(SurfaceTexture st) {
-        synchronized (mReadyFence) {
+        synchronized(mReadyFence) {
             if (!mReady) {
                 return;
             }
@@ -216,7 +213,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      * TODO: do something less clumsy
      */
     public void setTextureId(int id) {
-        synchronized (mReadyFence) {
+        synchronized(mReadyFence) {
             if (!mReady) {
                 return;
             }
@@ -224,26 +221,17 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         mHandler.sendMessage(mHandler.obtainMessage(MSG_SET_TEXTURE_ID, id, 0, null));
     }
 
-    public void updateTexImage(SurfaceTexture surfaceTexture) {
-        synchronized (mReadyFence) {
-            if (!mReady) {
-                return;
-            }
-        }
-
-        mHandler.sendMessage(mHandler.obtainMessage(MSG_UPDATE_TEX_IMAGE, surfaceTexture));
-    }
-
     /**
      * Encoder thread entry point.  Establishes Looper/Handler and waits for messages.
      * <p>
+     *
      * @see Thread#run()
      */
     @Override
     public void run() {
         // Establish a Looper for this thread, and define a Handler for it.
         Looper.prepare();
-        synchronized (mReadyFence) {
+        synchronized(mReadyFence) {
             mHandler = new EncoderHandler(this);
             mReady = true;
             mReadyFence.notify();
@@ -251,7 +239,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         Looper.loop();
 
         Log.d(TAG, "Encoder thread exiting");
-        synchronized (mReadyFence) {
+        synchronized(mReadyFence) {
             mReady = mRunning = false;
             mHandler = null;
         }
@@ -266,18 +254,20 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         prepareEncoder(config);
     }
 
-
     /**
      * Handles notification of an available frame.
      * <p>
      * The texture is rendered onto the encoder's input surface, along with a moving
      * box (just because we can).
      * <p>
-     * @param transform The texture transform, from SurfaceTexture.
+     *
+     * @param transform      The texture transform, from SurfaceTexture.
      * @param timestampNanos The frame's timestamp, from SurfaceTexture.
      */
     private void handleFrameAvailable(float[] transform, long timestampNanos) {
-        if (VERBOSE) Log.d(TAG, "handleFrameAvailable tr=" + transform);
+        if (VERBOSE) {
+            Log.d(TAG, "handleFrameAvailable tr=" + transform);
+        }
 
         mVideoEncoder.drainEncoder(false);
         mFullScreen.drawFrame(mTextureId, transform);
@@ -331,11 +321,6 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         mFullScreen.setBottomCropped(mBottomCropped);
     }
 
-    private void handleUpdateTexImage(SurfaceTexture texture) {
-        if (VERBOSE) Log.d(TAG, "handleUpdateTexImage texture=" + texture);
-        texture.updateTexImage();
-    }
-
     private void prepareEncoder(EncoderConfig config) {
         mTopCropped = config.mTopCropped;
         mBottomCropped = config.mBottomCropped;
@@ -348,7 +333,6 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         mEglCore = new EglCore(config.mEglContext, EglCore.FLAG_RECORDABLE);
         mInputWindowSurface = new WindowSurface(mEglCore, mVideoEncoder.getInputSurface(), true);
         mInputWindowSurface.makeCurrent();
-
 
         mFullScreen = new MainFrameRect(
                 new Texture2dProgram(Texture2dProgram.ProgramType.TEXTURE_EXT));
@@ -368,6 +352,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
             mCallback.onEncoderPrepared(mSurface);
         }
     }
+
     @Override
     public void onFrameAvailable(SurfaceTexture surfaceTexture) {
         Log.d(TAG, "onFrameAvailable");
@@ -422,7 +407,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      * under us).
      * <p>
      * TODO: make frame rate and iframe interval configurable?  Maybe use builder pattern
-     *       with reasonable defaults for those and bit rate.
+     * with reasonable defaults for those and bit rate.
      */
     public static class EncoderConfig {
         final File mOutputFile;
@@ -436,7 +421,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         public EncoderConfig(File outputFile, int width, int height,
                              float topCropped, float bottomCropped,
                              int bitRate,
-                EGLContext sharedEglContext) {
+                             EGLContext sharedEglContext) {
             mOutputFile = outputFile;
             mWidth = width;
             mHeight = height;
@@ -493,9 +478,6 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
                     break;
                 case MSG_UPDATE_SHARED_CONTEXT:
                     encoder.handleUpdateSharedContext((EGLContext) inputMessage.obj);
-                    break;
-                case MSG_UPDATE_TEX_IMAGE:
-                    encoder.handleUpdateTexImage((SurfaceTexture)inputMessage.obj);
                     break;
                 case MSG_QUIT:
                     Log.d(TAG, "Exit encoder loop");
