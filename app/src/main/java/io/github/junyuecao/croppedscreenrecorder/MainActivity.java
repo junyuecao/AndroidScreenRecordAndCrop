@@ -28,6 +28,7 @@ import java.util.TimerTask;
 @RuntimePermissions
 public class MainActivity extends AppCompatActivity implements View.OnClickListener, View.OnTouchListener {
 
+    ScreenCapture mScreenCapture;
     Timer mTimer;
     TextView mTime;
     Handler mHandler;
@@ -45,12 +46,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             case R.id.cancel:
                 mRecordLayout.setVisibility(View.GONE);
                 mStart.setVisibility(View.VISIBLE);
-                ScreenCapture.getInstance(this).stopProjection();
+                mScreenCapture.stopProjection();
                 break;
         }
     }
+
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         // NOTE: delegate the permission handling to generated method
         MainActivityPermissionsDispatcher.onRequestPermissionsResult(this, requestCode, grantResults);
@@ -63,10 +66,10 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 switch (MotionEventCompat.getActionMasked(event)) {
                     case MotionEvent.ACTION_DOWN:
-                        ScreenCapture.getInstance(this).attachRecorder();
+                        mScreenCapture.attachRecorder();
                         return true;
                     case MotionEvent.ACTION_UP:
-                        ScreenCapture.getInstance(this).detachRecorder();
+                        mScreenCapture.detachRecorder();
                         return true;
                 }
             }
@@ -80,7 +83,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         setContentView(R.layout.activity_main);
         mHandler = new Handler();
         mTime = (TextView) findViewById(R.id.time);
-
 
         mStart = (Button) findViewById(R.id.start);
         mRecordLayout = (LinearLayout) findViewById(R.id.recordLayout);
@@ -116,19 +118,30 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         mTimer = null;
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mScreenCapture != null && mScreenCapture.isProjecting()) {
+            mScreenCapture.stopProjection();
+        }
+    }
+
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     @NeedsPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     void tryRecordScreen() {
-        ScreenCapture instance = ScreenCapture.getInstance(this);
-        instance.setMediaProjectionReadyListener(new ScreenCapture.OnMediaProjectionReadyListener() {
+        if (mScreenCapture == null) {
+            mScreenCapture = new ScreenCapture(this);
+        }
+        mScreenCapture.setMediaProjectionReadyListener(new ScreenCapture.OnMediaProjectionReadyListener() {
             @Override
             public void onMediaProjectionReady(MediaProjection mediaProjection) {
                 mRecordLayout.setVisibility(View.VISIBLE);
                 mStart.setVisibility(View.GONE);
             }
         });
-        instance.requestScreenCapture();
+        mScreenCapture.requestScreenCapture();
     }
+
     @OnPermissionDenied(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     void showDenied() {
         Toast.makeText(this, "Need permission to work properly", Toast.LENGTH_SHORT).show();
@@ -145,8 +158,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
         if (requestCode == ScreenCapture.CAPTURE_REQUEST_CODE && resultCode == RESULT_OK) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ScreenCapture instance = ScreenCapture.getInstance(this);
-                instance.startProjection(data);
+                mScreenCapture.startProjection(data);
             }
             return;
         }

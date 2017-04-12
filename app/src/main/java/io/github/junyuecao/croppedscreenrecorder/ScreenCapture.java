@@ -48,7 +48,7 @@ public class ScreenCapture {
     private boolean recording;
     private int mBitRate = 5 * 1024 * 1024;
 
-    private ScreenCapture(Activity activity) {
+    public ScreenCapture(Activity activity) {
         mActivity = new WeakReference<>(activity);
         projectionManager = (MediaProjectionManager) activity.getSystemService(MEDIA_PROJECTION_SERVICE);
         DisplayMetrics metrics = new DisplayMetrics();
@@ -57,17 +57,6 @@ public class ScreenCapture {
         width = 720;
         height = 1280;
         mRecorder = new TextureMovieEncoder();
-    }
-
-    public static ScreenCapture getInstance(Activity activity) {
-        if (sInstance == null) {
-            synchronized(ScreenCapture.class) {
-                if (sInstance == null) {
-                    sInstance = new ScreenCapture(activity);
-                }
-            }
-        }
-        return sInstance;
     }
 
     /**
