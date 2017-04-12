@@ -6,7 +6,6 @@ import android.app.Activity;
 import android.content.Intent;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
-import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.opengl.EGL14;
@@ -39,7 +38,6 @@ public class ScreenCapture {
     private final WeakReference<Activity> mActivity;
     private final int mScreenDensity;
     private MediaProjectionManager projectionManager;
-    private MediaRecorder mediaRecorder;
     private TextureMovieEncoder mRecorder;
     private int width;
     private int height;
@@ -49,7 +47,6 @@ public class ScreenCapture {
     private OnMediaProjectionReadyListener mMediaProjectionReadyListener;
     private boolean recording;
     private int mBitRate = 5 * 1024 * 1024;
-    private int mFrameRate = 30;
 
     private ScreenCapture(Activity activity) {
         mActivity = new WeakReference<>(activity);
@@ -59,7 +56,6 @@ public class ScreenCapture {
         mScreenDensity = metrics.densityDpi;
         width = 720;
         height = 1280;
-        mediaRecorder = new MediaRecorder();
         mRecorder = new TextureMovieEncoder();
     }
 
