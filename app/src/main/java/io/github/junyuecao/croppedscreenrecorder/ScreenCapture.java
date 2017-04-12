@@ -20,17 +20,16 @@ import android.util.Log;
 import android.view.Surface;
 
 import java.io.File;
-import java.io.IOException;
 import java.lang.ref.WeakReference;
 
 /**
- * 抓取屏幕
- * 流程：
- * 1，请求权限，
- * 2，开始投射，
- * 3，附着MediaRecorder录像，
- * 4，录完断开MediaRecorder，
- * 5，关闭投射，销毁
+ * Screen capture
+ * process：
+ * 1，request for capture permission，
+ * 2，start projection，
+ * 3，attach encoder，
+ * 4，detach encoder when finish，
+ * 5，close projection and destroy
  */
 @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
 public class ScreenCapture {
@@ -76,14 +75,14 @@ public class ScreenCapture {
     }
 
     /**
-     * @return 是否正在投屏
+     * @return true when projecting
      */
     public boolean isProjecting() {
         return running;
     }
 
     /**
-     * @return 是否正在录屏
+     * @return retrun true when recording screen
      */
     public boolean isRecording() {
         return recording;
@@ -98,7 +97,7 @@ public class ScreenCapture {
     }
 
     /**
-     * 第一步：请求屏幕捕获
+     * Step 1: request permission
      */
     public void requestScreenCapture() {
         Log.d(TAG, "Start requestScreenCapture");
@@ -107,11 +106,11 @@ public class ScreenCapture {
     }
 
     /**
-     * 第二步，初始化MediaProjection
+     * Step 2，Init MediaProjection
      *
-     * @param data onActivityResult返回的data
+     * @param data data returned from onActivityResult
      *
-     * @return 是否成功
+     * @return true if success
      */
     public boolean startProjection(Intent data) {
         Log.d(TAG, "Start startProjection");
@@ -129,18 +128,16 @@ public class ScreenCapture {
     }
 
     /**
-     * 第3步，将Encoder附着到虚拟屏幕上，开始录屏
+     * Step 3，attach encoder to the virtual screen and start to record
      *
-     * @return 成功或失败
+     * @return true if attach success
      */
     public boolean attachRecorder() {
         Log.d(TAG, "Start attachRecorder");
         if (!running || recording) {
-            // 没有投屏或者正在录屏，都返回失败
+            // if not projecting screen or already recording return false
             return false;
         }
-        // Set up the texture blitter that will be used for on-screen display.  This
-        // is *not* applied to the recording, because that uses a separate shader.
         EGLContext eglContext = EGL14.eglGetCurrentContext();
         File file = getFile();
         float cropTop = ((float) Utils.getStatusBarHeight(mActivity.get())) /  Utils.getRealHeight(mActivity.get());
@@ -155,23 +152,19 @@ public class ScreenCapture {
             }
         });
 
-        // initRecorder();
-        // final Surface surface = mediaRecorder.getSurface();
-        // virtualDisplay.setSurface(surface);
-        // mediaRecorder.start();
         recording = true;
         return true;
     }
 
     /**
-     * 第4步，将MediaRecorder附着到虚拟屏幕上，开始录屏
+     * Step 4，detach encoder from virtual screen and stop recoding.
      *
-     * @return 成功或失败
+     * @return true if success
      */
     public boolean detachRecorder() {
         Log.d(TAG, "Start detachRecorder");
         if (!running || !recording) {
-            // 没有投屏，或者没有在录屏，返回失败
+            // if not projecting or not recording return false
             return false;
         }
         recording = false;
@@ -179,16 +172,11 @@ public class ScreenCapture {
         mRecorder.stopRecording();
         virtualDisplay.setSurface(null);
 
-
-        // mediaRecorder.stop();
-        // virtualDisplay.setSurface(null);
-        // mediaRecorder.reset();
-
         return true;
     }
 
     /**
-     * 第5步：结束投屏，完毕后调用
+     * Step 5：stop projection and destroy
      */
     public boolean stopProjection() {
         Log.d(TAG, "Start stopProjection");
@@ -217,7 +205,7 @@ public class ScreenCapture {
                 height,
                 mScreenDensity,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                null, // 先不需要显示
+                null, // we don't need to display by now
                 new VirtualDisplay.Callback() {
                     @Override
                     public void onPaused() {
@@ -233,27 +221,13 @@ public class ScreenCapture {
                 }, null);
     }
 
-    private void initRecorder() {
-        File file = getFile();
-        mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
-        mediaRecorder.setOutputFile(file.getAbsolutePath());
-        mediaRecorder.setVideoSize(width, height);
-        mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-        mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
-        mediaRecorder.setVideoEncodingBitRate(mBitRate);
-        mediaRecorder.setVideoFrameRate(mFrameRate);
-        try {
-            mediaRecorder.prepare();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
     @NonNull
     private File getFile() {
-        return new File(Environment.getExternalStorageDirectory() + File.separator + "test", System.currentTimeMillis() + ".mp4");
+        File file = new File(Environment.getExternalStorageDirectory() + File.separator + "test", System.currentTimeMillis() + ".mp4");
+        if (!file.exists()) {
+            file.mkdirs();
+        }
+        return file;
     }
 
     public interface OnMediaProjectionReadyListener {

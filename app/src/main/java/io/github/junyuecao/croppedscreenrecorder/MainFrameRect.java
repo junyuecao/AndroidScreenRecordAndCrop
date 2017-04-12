@@ -21,7 +21,10 @@ import io.github.junyuecao.croppedscreenrecorder.gles.GlUtil;
 import io.github.junyuecao.croppedscreenrecorder.gles.Texture2dProgram;
 
 /**
- * 这个类表示掐头去尾留中间的区域
+ * This class is used to cut the top and bottom area of the screen and
+ * just keep the center main part.
+ *
+ * In this demo, we'll cut the status bar and navigation bar of the screen
  */
 public class MainFrameRect {
     private final CroppedDrawable2d mRectDrawable;
@@ -73,14 +76,14 @@ public class MainFrameRect {
     }
 
     /**
-     * @param bottomCropped 切掉底部的像素长度 比如，裁剪掉导航栏200像素
+     * @param bottomCropped defines the bottom area to be cut. from 0f-1f.
      */
     public void setBottomCropped(float bottomCropped) {
         mRectDrawable.setBottomCropped(bottomCropped);
     }
 
     /**
-     * 切掉头部的像素长度
+     * @param topCropped defines the top area to be cut. from 0f-1f.
      */
     public void setTopCropped(float topCropped) {
         mRectDrawable.setTopCropped(topCropped);

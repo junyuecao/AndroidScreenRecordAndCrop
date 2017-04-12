@@ -35,7 +35,7 @@ public class CroppedDrawable2d extends Drawable2d {
     }
 
     /**
-     * @param bottomCropped 切掉底部的像素比例
+     * @param bottomCropped defines the proportion to be cut on the top
      */
     public void setBottomCropped(float bottomCropped) {
         if (bottomCropped < 0.0f || bottomCropped > 1.0f) {
@@ -46,7 +46,7 @@ public class CroppedDrawable2d extends Drawable2d {
     }
 
     /**
-     * 切掉头部的比例
+     * @param  crop defines the proportion to be cut on the top
      */
     public void setTopCropped(float crop) {
         if (crop < 0.0f || crop > 1.0f) {
@@ -61,8 +61,6 @@ public class CroppedDrawable2d extends Drawable2d {
      * a modified version of the array from the parent class.
      * <p>
      * To avoid allocations, this returns internal state.  The caller must not modify it.
-     * 参考 http://stackoverflow.com/questions/30587291/crop-video-before-encoding-with-mediacodec-for-grafikas-continuous-capture-ac
-     * 进行裁剪
      *
      * @see Drawable2d#FULL_RECTANGLE_TEX_COORDS
      */
@@ -90,10 +88,10 @@ public class CroppedDrawable2d extends Drawable2d {
                 } else if (i == 2 || i == 6) {
                     fl = 1.0f;
                 } else if (i == 1 || i == 3) {
-                    // 下方裁剪
+                    // Crop the bottom
                     fl = mBottomCropped;
                 } else if (i == 5 || i == 7) {
-                    // 上方裁剪
+                    // Crop the top
                     fl = 1.0f - mTopCropped;
                 }
 
