@@ -19,7 +19,6 @@ package io.github.junyuecao.croppedscreenrecorder;
 import static android.os.Build.VERSION_CODES.LOLLIPOP;
 
 import android.media.AudioFormat;
-import android.media.AudioRecord;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
@@ -48,13 +47,12 @@ public class VideoEncoderCore {
     private static final String TAG = "VideoEncoderCore";
     private static final boolean VERBOSE = false;
     private static final int TIMEOUT_USEC = 10000;
-    private static final int DEFAULT_SOURCE = MediaRecorder.AudioSource.MIC;
-    private static final int DEFAULT_SAMPLE_RATE = 44100;
-    private static final int DEFAULT_CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_STEREO;
-    private static final int DEFAULT_DATA_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
+    public static final int DEFAULT_SOURCE = MediaRecorder.AudioSource.MIC;
+    public static final int DEFAULT_SAMPLE_RATE = 44100;
+    public static final int DEFAULT_CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_DEFAULT;
+    public static final int DEFAULT_DATA_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
 
-
-    private static final int SAMPLES_PER_FRAME = 1024;
+    public static final int SAMPLES_PER_FRAME = 1024;
 
     // TODO: these ought to be configurable as well
     private static final String VIDEO_MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC;    // H.264 Advanced Video Coding
@@ -71,7 +69,7 @@ public class VideoEncoderCore {
     private int mVTrackIndex;
     private int mATrackIndex;
     private boolean mMuxerStarted;
-    private AudioRecord mAudioRecord;
+
 
     /**
      * Configures encoder and muxer state, and prepares the input Surface.
@@ -90,7 +88,9 @@ public class VideoEncoderCore {
         videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, bitRate);
         videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
         videoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, IFRAME_INTERVAL);
-        if (VERBOSE) Log.d(TAG, "videoFormat: " + videoFormat);
+        if (VERBOSE) {
+            Log.d(TAG, "videoFormat: " + videoFormat);
+        }
 
         // Create a MediaCodec encoder, and configure it with our videoFormat.  Get a Surface
         // we can use for input and wrap it with a class that handles the EGL work.
@@ -98,9 +98,6 @@ public class VideoEncoderCore {
         mVideoEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         mInputSurface = mVideoEncoder.createInputSurface();
         mVideoEncoder.start();
-
-        // init AudioRecord to record from mic
-        initAudioRecord(DEFAULT_SOURCE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG, DEFAULT_DATA_FORMAT);
 
         MediaFormat audioFormat = MediaFormat.createAudioFormat(AUDIO_MIME_TYPE,
                 DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG);
@@ -125,22 +122,6 @@ public class VideoEncoderCore {
         mMuxerStarted = false;
     }
 
-    public boolean initAudioRecord(int audioSource, int sampleRateInHz, int channelConfig, int audioFormat) {
-        int minBufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
-        if (minBufferSize == AudioRecord.ERROR_BAD_VALUE) {
-            Log.e(TAG, "Invalid parameter !");
-            return false;
-        }
-        mAudioRecord = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat, minBufferSize * 4);
-        if (mAudioRecord.getState() == AudioRecord.STATE_UNINITIALIZED) {
-            Log.e(TAG, "AudioRecord initialize fail !");
-            return false;
-        }
-
-        mAudioRecord.startRecording();
-        return true;
-    }
-
     /**
      * Returns the encoder's input surface.
      */
@@ -152,16 +133,26 @@ public class VideoEncoderCore {
      * Releases encoder resources.
      */
     public void release() {
-        if (VERBOSE) Log.d(TAG, "releasing encoder objects");
+        if (VERBOSE) {
+            Log.d(TAG, "releasing encoder objects");
+        }
+
         if (mVideoEncoder != null) {
             mVideoEncoder.stop();
             mVideoEncoder.release();
             mVideoEncoder = null;
         }
+        if (mAudioEncoder != null) {
+            mAudioEncoder.stop();
+            mAudioEncoder.release();
+            mAudioEncoder = null;
+        }
         if (mMuxer != null) {
-            // TODO: stop() throws an exception if you haven't fed it any data.  Keep track
-            //       of frames submitted, and don't call stop() if we haven't written anything.
-            mMuxer.stop();
+            try {
+                mMuxer.stop();
+            } catch (IllegalStateException e) {
+                throw new IllegalStateException("Cannot stop Muxer since muxer is in the wrong state.");
+            }
             mMuxer.release();
             mMuxer = null;
         }
@@ -178,16 +169,18 @@ public class VideoEncoderCore {
      * not recording audio.
      */
     public void drainEncoder(boolean endOfStream) {
-        if (VERBOSE) Log.d(TAG, "drainEncoder(" + endOfStream + ")");
+        if (VERBOSE) {
+            Log.d(TAG, "drainEncoder(" + endOfStream + ")");
+        }
 
         if (endOfStream) {
-            if (VERBOSE) Log.d(TAG, "sending EOS to encoder");
+            if (VERBOSE) {
+                Log.d(TAG, "sending EOS to encoder");
+            }
             mVideoEncoder.signalEndOfInputStream();
         }
 
         drainVideo(endOfStream);
-
-        drainAudio(endOfStream);
     }
 
     private void drainVideo(boolean endOfStream) {
@@ -199,7 +192,9 @@ public class VideoEncoderCore {
                 if (!endOfStream) {
                     break;      // out of while
                 } else {
-                    if (VERBOSE) Log.d(TAG, "no output available, spinning to await EOS");
+                    if (VERBOSE) {
+                        Log.d(TAG, "no output available, spinning to await EOS");
+                    }
                 }
             } else if (encoderStatus == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
                 // not expected for an encoder
@@ -231,7 +226,9 @@ public class VideoEncoderCore {
                 if ((mVBufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                     // The codec config data was pulled out and fed to the muxer when we got
                     // the INFO_OUTPUT_FORMAT_CHANGED status.  Ignore it.
-                    if (VERBOSE) Log.d(TAG, "ignoring BUFFER_FLAG_CODEC_CONFIG");
+                    if (VERBOSE) {
+                        Log.d(TAG, "ignoring BUFFER_FLAG_CODEC_CONFIG");
+                    }
                     mVBufferInfo.size = 0;
                 }
 
@@ -257,7 +254,9 @@ public class VideoEncoderCore {
                     if (!endOfStream) {
                         Log.w(TAG, "reached end of stream unexpectedly");
                     } else {
-                        if (VERBOSE) Log.d(TAG, "end of stream reached");
+                        if (VERBOSE) {
+                            Log.d(TAG, "end of stream reached");
+                        }
                     }
                     break;      // out of while
                 }
@@ -265,53 +264,60 @@ public class VideoEncoderCore {
         }
     }
 
-    private void drainAudio(boolean endOfStream) {
-        byte[] buffer = new byte[SAMPLES_PER_FRAME * 2];
-        int ret = mAudioRecord.read(buffer, 0, buffer.length);
-        if (ret == AudioRecord.ERROR_INVALID_OPERATION) {
-            Log.e(TAG, "Error ERROR_INVALID_OPERATION");
-        } else if (ret == AudioRecord.ERROR_BAD_VALUE) {
-            Log.e(TAG, "Error ERROR_BAD_VALUE");
-        } else if (ret > 0){
-            ByteBuffer[] encoderOutputBuffers = mAudioEncoder.getOutputBuffers();
+    public void drainAudio(byte[] buffer, int size) {
+        if (buffer == null || size < 0 || size > buffer.length) {
+            Log.w(TAG, "drainAudio: buffer is invalid");
+            return;
+        }
+        boolean done = false;
+        while (!done) {
+            // Start to put data to InputBuffer
+            int index = mAudioEncoder.dequeueInputBuffer(TIMEOUT_USEC);
+            if (index
+                    >= 0) { // In case we didn't get any input buffer, it may be blocked by all output buffers being
+                // full, thus try to drain them below if we didn't get any
+                ByteBuffer in = mAudioEncoder.getInputBuffer(index);
+                in.clear();
+                in.put(buffer, 0, size);
+                mAudioEncoder.queueInputBuffer(index, 0, size, System.nanoTime() / 1000, 0);
+                done = true; // Done passing the input to the codec, but still check for available output below
+            }
 
-            boolean done = false;
-            while (!done) {
-                int index = mAudioEncoder.dequeueInputBuffer(TIMEOUT_USEC);
-                if (index >= 0) { // In case we didn't get any input buffer, it may be blocked by all output buffers being full, thus try to drain them below if we didn't get any
-                    ByteBuffer in = encoderOutputBuffers[index];
-                    in.clear();
-                    in.put(buffer, 0, ret);
-                    mAudioEncoder.queueInputBuffer(index, 0, ret, System.nanoTime()/1000, 0);
-                    done = true; // Done passing the input to the codec, but still check for available output below
+            // Start to get data from OutputBuffer and write to Muxer
+            index = mAudioEncoder.dequeueOutputBuffer(mABufferInfo, TIMEOUT_USEC);
+            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                if (mATrackIndex != -1) {
+                    throw new RuntimeException("format changed twice");
                 }
-                index = mAudioEncoder.dequeueOutputBuffer(mABufferInfo, TIMEOUT_USEC);
-                if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    if (mATrackIndex != -1) {
-                        throw new RuntimeException("format changed twice");
-                    }
-                    mATrackIndex = mMuxer.addTrack(mAudioEncoder.getOutputFormat());
-                    tryStartMuxer();
+                mATrackIndex = mMuxer.addTrack(mAudioEncoder.getOutputFormat());
+                tryStartMuxer();
 
-                } else if (index >= 0) {
-                    if ((mABufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        // ignore codec config
-                        mABufferInfo.size = 0;
-                    }
-                    if (mATrackIndex != -1 && mABufferInfo.size > 0) {
-                        ByteBuffer out = mAudioEncoder.getOutputBuffer(index);
-                        out.position(mABufferInfo.offset);
-                        out.limit(mABufferInfo.offset + mABufferInfo.size);
-                        mMuxer.writeSampleData(mATrackIndex, out, mABufferInfo);
-                        mAudioEncoder.releaseOutputBuffer(index, false);
-                    }
+            } else if (index >= 0) {
+                if (!mMuxerStarted) {
+                    Log.w(TAG, "Muxer is not started, just return");
+                    // let's ignore it
+                    return;
+                }
+                if ((mABufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                    // ignore codec config
+                    mABufferInfo.size = 0;
+                }
+                if (mATrackIndex != -1 && mABufferInfo.size > 0) {
+                    ByteBuffer out = mAudioEncoder.getOutputBuffer(index);
+                    out.position(mABufferInfo.offset);
+                    out.limit(mABufferInfo.offset + mABufferInfo.size);
+                    mMuxer.writeSampleData(mATrackIndex, out, mABufferInfo);
+                    mAudioEncoder.releaseOutputBuffer(index, false);
                 }
             }
         }
     }
 
     private void tryStartMuxer() {
-        if (mVTrackIndex != -1 && mATrackIndex != -1) {
+        if (mVTrackIndex != -1  // Video track is added
+                && mATrackIndex != -1 // and audio track is added
+                && !mMuxerStarted) { // and muxer not started
+            // then start the muxer
             mMuxer.start();
             mMuxerStarted = true;
         }

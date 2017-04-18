@@ -16,7 +16,14 @@
 
 package io.github.junyuecao.croppedscreenrecorder;
 
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_CHANNEL_CONFIG;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_DATA_FORMAT;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_SAMPLE_RATE;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_SOURCE;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.SAMPLES_PER_FRAME;
+
 import android.graphics.SurfaceTexture;
+import android.media.AudioRecord;
 import android.opengl.EGLContext;
 import android.opengl.GLES20;
 import android.os.Build;
@@ -69,8 +76,8 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
     private static final int MSG_FRAME_AVAILABLE = 2;
     private static final int MSG_SET_TEXTURE_ID = 3;
     private static final int MSG_UPDATE_SHARED_CONTEXT = 4;
-    private static final int MSG_QUIT = 5;
-
+    private static final int MSG_AUDIO_FRAME_AVAILABLE = 5;
+    private static final int MSG_QUIT = 6;
     // ----- accessed exclusively by encoder thread -----
     private WindowSurface mInputWindowSurface;
     private EglCore mEglCore;
@@ -98,6 +105,11 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
     private Surface mSurface;
     private float mTopCropped;
     private float mBottomCropped;
+
+
+    private boolean mAudioLoopExit = false;
+    private Thread mAudioThread;
+    private AudioRecord mAudioRecord;
 
     public Callback getCallback() {
         return mCallback;
@@ -204,6 +216,17 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
 
         mHandler.sendMessage(mHandler.obtainMessage(MSG_FRAME_AVAILABLE,
                 (int) (timestamp >> 32), (int) timestamp, transform));
+    }
+
+
+    public void audioFrameAvailable(byte[] buffer, int size) {
+        synchronized(mReadyFence) {
+            if (!mReady) {
+                return;
+            }
+        }
+
+        mHandler.sendMessage(mHandler.obtainMessage(MSG_AUDIO_FRAME_AVAILABLE, size, 0, buffer));
     }
 
     /**
@@ -321,6 +344,11 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         mFullScreen.setBottomCropped(mBottomCropped);
     }
 
+
+    private void handleAudioFrameAvailable(byte[] buffer, int size) {
+        mVideoEncoder.drainAudio(buffer, size);
+    }
+
     private void prepareEncoder(EncoderConfig config) {
         mTopCropped = config.mTopCropped;
         mBottomCropped = config.mBottomCropped;
@@ -351,6 +379,29 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         if (mCallback != null) {
             mCallback.onEncoderPrepared(mSurface);
         }
+
+        // init AudioRecord to record from mic
+        initAudioRecord(DEFAULT_SOURCE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG, DEFAULT_DATA_FORMAT);
+
+        mAudioLoopExit = false;
+        mAudioThread = new Thread(new AudioRunnable());
+        mAudioThread.start();
+    }
+
+    private boolean initAudioRecord(int audioSource, int sampleRateInHz, int channelConfig, int audioFormat) {
+        int minBufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
+        if (minBufferSize == AudioRecord.ERROR_BAD_VALUE) {
+            Log.e(TAG, "Invalid parameter !");
+            return false;
+        }
+        mAudioRecord = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat, minBufferSize * 4);
+        if (mAudioRecord.getState() == AudioRecord.STATE_UNINITIALIZED) {
+            Log.e(TAG, "AudioRecord initialize fail !");
+            return false;
+        }
+
+        mAudioRecord.startRecording();
+        return true;
     }
 
     @Override
@@ -380,6 +431,19 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
             mEglCore.release();
             mEglCore = null;
         }
+        try {
+            mAudioThread.interrupt();
+            mAudioThread.join(1000);
+            mAudioLoopExit = true;
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        if (mAudioRecord != null) {
+            mAudioRecord.stop();
+            mAudioRecord.release();
+            mAudioRecord = null;
+        }
+
     }
 
     /**
@@ -479,12 +543,32 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
                 case MSG_UPDATE_SHARED_CONTEXT:
                     encoder.handleUpdateSharedContext((EGLContext) inputMessage.obj);
                     break;
+                case MSG_AUDIO_FRAME_AVAILABLE:
+                    encoder.handleAudioFrameAvailable((byte[]) inputMessage.obj, inputMessage.arg1);
+                    break;
                 case MSG_QUIT:
                     Log.d(TAG, "Exit encoder loop");
                     Looper.myLooper().quit();
                     break;
                 default:
                     throw new RuntimeException("Unhandled msg what=" + what);
+            }
+        }
+    }
+
+    private class AudioRunnable implements Runnable {
+        @Override
+        public void run() {
+            while (!mAudioLoopExit) {
+                byte[] buffer = new byte[SAMPLES_PER_FRAME * 2];
+                int ret = mAudioRecord.read(buffer, 0, buffer.length);
+                if (ret == AudioRecord.ERROR_INVALID_OPERATION) {
+                    Log.e(TAG, "Error ERROR_INVALID_OPERATION");
+                } else if (ret == AudioRecord.ERROR_BAD_VALUE) {
+                    Log.e(TAG, "Error ERROR_BAD_VALUE");
+                } else {
+                    audioFrameAvailable(buffer, ret);
+                }
             }
         }
     }
