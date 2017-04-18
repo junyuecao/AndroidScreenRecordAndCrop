@@ -1,11 +1,17 @@
 package io.github.junyuecao.croppedscreenrecorder;
 
 import static android.content.Context.MEDIA_PROJECTION_SERVICE;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_CHANNEL_CONFIG;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_DATA_FORMAT;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_SAMPLE_RATE;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_SOURCE;
+import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.SAMPLES_PER_FRAME;
 
 import android.app.Activity;
 import android.content.Intent;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.AudioRecord;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.opengl.EGL14;
@@ -47,6 +53,10 @@ public class ScreenCapture {
     private OnMediaProjectionReadyListener mMediaProjectionReadyListener;
     private boolean recording;
     private int mBitRate = 5 * 1024 * 1024;
+
+    private boolean mAudioLoopExited = false;
+    private Thread mAudioThread;
+    private AudioRecord mAudioRecord;
 
     public ScreenCapture(Activity activity) {
         mActivity = new WeakReference<>(activity);
@@ -137,6 +147,13 @@ public class ScreenCapture {
             }
         });
 
+        // init AudioRecord to record from mic
+        initAudioRecord(DEFAULT_SOURCE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG, DEFAULT_DATA_FORMAT);
+
+        mAudioLoopExited = false;
+        mAudioThread = new Thread(new AudioRunnable());
+        mAudioThread.start();
+
         recording = true;
         return true;
     }
@@ -153,6 +170,13 @@ public class ScreenCapture {
             return false;
         }
         recording = false;
+        mAudioLoopExited = true;
+
+        if (mAudioRecord != null) {
+            mAudioRecord.stop();
+            mAudioRecord.release();
+            mAudioRecord = null;
+        }
 
         mRecorder.stopRecording();
         virtualDisplay.setSurface(null);
@@ -217,5 +241,53 @@ public class ScreenCapture {
 
     public interface OnMediaProjectionReadyListener {
         void onMediaProjectionReady(MediaProjection mediaProjection);
+    }
+
+    private boolean initAudioRecord(int audioSource, int sampleRateInHz, int channelConfig, int audioFormat) {
+        int minBufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
+        if (minBufferSize == AudioRecord.ERROR_BAD_VALUE) {
+            Log.e(TAG, "Invalid parameter !");
+            return false;
+        }
+        mAudioRecord = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat, minBufferSize * 4);
+        if (mAudioRecord.getState() == AudioRecord.STATE_UNINITIALIZED) {
+            Log.e(TAG, "AudioRecord initialize fail !");
+            return false;
+        }
+
+        mAudioRecord.startRecording();
+        return true;
+    }
+
+    private class AudioRunnable implements Runnable {
+        private byte[] mBuffer;
+
+        @Override
+        public void run() {
+            while (!mAudioLoopExited) {
+                enqueueAudioFrame(false);
+            }
+
+            enqueueAudioFrame(true);
+        }
+
+        private void enqueueAudioFrame(boolean endOfStream) {
+            if (mBuffer == null) {
+                mBuffer = new byte[SAMPLES_PER_FRAME * 2]; // prevent recreate buffer
+            }
+            int ret = mAudioRecord.read(mBuffer, 0, mBuffer.length);
+            if (ret == AudioRecord.ERROR_INVALID_OPERATION) {
+                Log.e(TAG, "Error ERROR_INVALID_OPERATION");
+            } else if (ret == AudioRecord.ERROR_BAD_VALUE) {
+                Log.e(TAG, "Error ERROR_BAD_VALUE");
+            } else {
+                if (endOfStream) {
+                    Log.d(TAG, "AudioLoopExiting, add flag end of stream");
+                    mRecorder.audioFrameAvailable(mBuffer, ret, true);
+                } else {
+                    mRecorder.audioFrameAvailable(mBuffer, ret, false);
+                }
+            }
+        }
     }
 }

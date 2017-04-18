@@ -151,7 +151,7 @@ public class VideoEncoderCore {
             try {
                 mMuxer.stop();
             } catch (IllegalStateException e) {
-                throw new IllegalStateException("Cannot stop Muxer since muxer is in the wrong state.");
+                throw new IllegalStateException("Cannot stop Muxer since muxer is in the wrong state: " + mMuxer) ;
             }
             mMuxer.release();
             mMuxer = null;
@@ -178,9 +178,16 @@ public class VideoEncoderCore {
                 Log.d(TAG, "sending EOS to encoder");
             }
             mVideoEncoder.signalEndOfInputStream();
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    enqueueAudioFrame(null, 0, true);
+                }
+            }).start();
         }
 
         drainVideo(endOfStream);
+        drainAudio(endOfStream);
     }
 
     private void drainVideo(boolean endOfStream) {
@@ -215,6 +222,11 @@ public class VideoEncoderCore {
                         encoderStatus);
                 // let's ignore it
             } else {
+                if (!mMuxerStarted) {
+                    Log.w(TAG, "Muxer is not started, just return");
+                    // let's ignore it
+                    break;
+                }
                 // same as mVideoEncoder.getOutputBuffer(encoderStatus)
                 ByteBuffer encodedData = encoderOutputBuffers[encoderStatus];
 
@@ -264,28 +276,48 @@ public class VideoEncoderCore {
         }
     }
 
-    public void drainAudio(byte[] buffer, int size) {
-        if (buffer == null || size < 0 || size > buffer.length) {
-            Log.w(TAG, "drainAudio: buffer is invalid");
-            return;
-        }
+    public void enqueueAudioFrame(byte[] buffer, int size, boolean endOfStream) {
         boolean done = false;
-        while (!done) {
+        while(!done) {
             // Start to put data to InputBuffer
             int index = mAudioEncoder.dequeueInputBuffer(TIMEOUT_USEC);
-            if (index
-                    >= 0) { // In case we didn't get any input buffer, it may be blocked by all output buffers being
+            if (index >= 0) { // In case we didn't get any input buffer, it may be blocked by all output buffers being
                 // full, thus try to drain them below if we didn't get any
                 ByteBuffer in = mAudioEncoder.getInputBuffer(index);
                 in.clear();
+                if (size < 0) {
+                    size = 0;
+                }
+                if (buffer == null) {
+                    buffer = new byte[0];
+                }
                 in.put(buffer, 0, size);
-                mAudioEncoder.queueInputBuffer(index, 0, size, System.nanoTime() / 1000, 0);
+                int flag = endOfStream ? MediaCodec.BUFFER_FLAG_END_OF_STREAM : 0;
+                mAudioEncoder.queueInputBuffer(index, 0, size, System.nanoTime() / 1000, flag);
                 done = true; // Done passing the input to the codec, but still check for available output below
+            } else if (index == MediaCodec.INFO_TRY_AGAIN_LATER){
+                // if input buffers are full try to drain them
+                if (VERBOSE) {
+                    Log.d(TAG, "no input available, spinning to await EOS");
+                }
             }
+        }
+    }
 
+    public void drainAudio(boolean endOfStream) {
+        while (true) {
             // Start to get data from OutputBuffer and write to Muxer
-            index = mAudioEncoder.dequeueOutputBuffer(mABufferInfo, TIMEOUT_USEC);
-            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+            int index = mAudioEncoder.dequeueOutputBuffer(mABufferInfo, TIMEOUT_USEC);
+            if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                // no output available yet
+                if (!endOfStream) {
+                    break;      // out of while
+                } else {
+                    if (VERBOSE) {
+                        Log.d(TAG, "no output available, spinning to await EOS");
+                    }
+                }
+            } if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 if (mATrackIndex != -1) {
                     throw new RuntimeException("format changed twice");
                 }
@@ -296,18 +328,31 @@ public class VideoEncoderCore {
                 if (!mMuxerStarted) {
                     Log.w(TAG, "Muxer is not started, just return");
                     // let's ignore it
-                    return;
+                    break;
                 }
                 if ((mABufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                     // ignore codec config
                     mABufferInfo.size = 0;
                 }
-                if (mATrackIndex != -1 && mABufferInfo.size > 0) {
+
+                if (mVBufferInfo.size != 0) {
                     ByteBuffer out = mAudioEncoder.getOutputBuffer(index);
                     out.position(mABufferInfo.offset);
                     out.limit(mABufferInfo.offset + mABufferInfo.size);
                     mMuxer.writeSampleData(mATrackIndex, out, mABufferInfo);
-                    mAudioEncoder.releaseOutputBuffer(index, false);
+                }
+
+                mAudioEncoder.releaseOutputBuffer(index, false);
+
+                if ((mABufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                    if (!endOfStream) {
+                        Log.w(TAG, "reached end of stream unexpectedly");
+                    } else {
+                        if (VERBOSE) {
+                            Log.d(TAG, "end of stream reached");
+                        }
+                    }
+                    break;      // out of while
                 }
             }
         }
