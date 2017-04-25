@@ -17,6 +17,9 @@ import android.opengl.EGL14;
 import android.opengl.EGLContext;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
 import android.support.annotation.NonNull;
 import android.support.annotation.RequiresApi;
 import android.util.DisplayMetrics;
@@ -27,37 +30,44 @@ import java.io.File;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 
+
 /**
  * Screen capture
  * process：
  * 1，request for capture permission，
- * 2，start projection，
- * 3，attach encoder，
+ * 2，start projection， (running)
+ * 3，attach encoder， (recording)
  * 4，detach encoder when finish，
  * 5，close projection and destroy
  */
 @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
 public class ScreenCapture {
+    public static final int MSG_SEND_AUDIO_FRAME = 0;
+    public static final int MSG_STOP = 1;
+    public static final int MSG_QUIT = 2;
+
     private static final String TAG = "ScreenCapture";
-    public static final int CAPTURE_REQUEST_CODE = 110;
+    public static final int CAPTURE_REQUEST_CODE = 8080;
     private static final int SAMPLES_PER_FRAME = 2048;
-    private static ScreenCapture sInstance;
-    private final WeakReference<Activity> mActivity;
+    private final WeakReference<Activity> mActivity; // Prevent memory leak
     private final int mScreenDensity;
     private MediaProjectionManager projectionManager;
     private TextureMovieEncoder mRecorder;
-    private int width;
-    private int height;
+    private int width = 360; // Width of the recorded video
+    private int height = 640; // Height of the recorded video
+    private int mBitRate = 1 * 1024 * 1024;
+
+    private boolean running; // true if it is projecting screen
+    private boolean recording; // true if it is recording screen
+
     private VirtualDisplay virtualDisplay;
-    private boolean running;
     private MediaProjection mediaProjection;
     private OnMediaProjectionReadyListener mMediaProjectionReadyListener;
-    private boolean recording;
-    private int mBitRate = 5 * 1024 * 1024;
 
-    private boolean mAudioLoopExited = false;
-    private Thread mAudioThread;
+    private AudioFrameSender mAudioSender;
+    private boolean mAudioLoopExited;
     private AudioRecord mAudioRecord;
+    private Thread mAudioThread;
 
     public ScreenCapture(Activity activity) {
         mActivity = new WeakReference<>(activity);
@@ -65,9 +75,15 @@ public class ScreenCapture {
         DisplayMetrics metrics = new DisplayMetrics();
         activity.getWindowManager().getDefaultDisplay().getMetrics(metrics);
         mScreenDensity = metrics.densityDpi;
-        width = 720;
-        height = 1280;
         mRecorder = new TextureMovieEncoder();
+    }
+
+    public RecordCallback getRecordCallback() {
+        return mRecorder.getRecordCallback();
+    }
+
+    public void setRecordCallback(RecordCallback recordCallback) {
+        mRecorder.setRecordCallback(recordCallback);
     }
 
     /**
@@ -130,14 +146,18 @@ public class ScreenCapture {
      */
     public boolean attachRecorder() {
         Log.d(TAG, "Start attachRecorder");
-        if (!running || recording) {
+        if (!running) {
             // if not projecting screen or already recording return false
+            requestScreenCapture();
+            return false;
+        }
+        if (recording) {
             return false;
         }
         EGLContext eglContext = EGL14.eglGetCurrentContext();
         File file = getFile();
-        float cropTop = ((float) Utils.getStatusBarHeight(mActivity.get())) /  Utils.getRealHeight(mActivity.get());
-        float cropBottom = ((float)Utils.getNavBarHeight(mActivity.get())) / Utils.getRealHeight(mActivity.get());
+        float cropTop = ((float) Utils.getStatusBarHeight(mActivity.get())) / Utils.getRealHeight(mActivity.get());
+        float cropBottom = ((float) Utils.getNavBarHeight(mActivity.get())) / Utils.getRealHeight(mActivity.get());
         mRecorder.startRecording(new TextureMovieEncoder.EncoderConfig(file,
                 width, height,
                 cropTop, cropBottom, mBitRate, eglContext));
@@ -147,6 +167,9 @@ public class ScreenCapture {
                 virtualDisplay.setSurface(surface);
             }
         });
+
+        mAudioSender = new AudioFrameSender();
+        mAudioSender.start();
 
         // init AudioRecord to record from mic
         initAudioRecord(DEFAULT_SOURCE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG, DEFAULT_DATA_FORMAT);
@@ -179,6 +202,11 @@ public class ScreenCapture {
             mAudioRecord = null;
         }
 
+        if (mAudioSender != null) {
+            mAudioSender.stop();
+            mAudioSender = null;
+        }
+
         mRecorder.stopRecording();
         virtualDisplay.setSurface(null);
 
@@ -193,16 +221,21 @@ public class ScreenCapture {
         if (!running) {
             return false;
         }
-        running = false;
         if (recording) {
             detachRecorder();
         }
+        running = false;
         virtualDisplay.release();
         mediaProjection.stop();
 
         return true;
     }
 
+    public void sendAudioFrame(ByteBuffer byteBuffer, int size, boolean isEnd) {
+        if (mAudioSender != null && mAudioSender.isRunning()) {
+            mAudioSender.sendAudioFrame(byteBuffer, size, isEnd);
+        }
+    }
 
     private boolean isCurrentActivity(Activity activity) {
         return mActivity.get() == activity;
@@ -233,7 +266,9 @@ public class ScreenCapture {
 
     @NonNull
     private File getFile() {
-        File file = new File(Environment.getExternalStorageDirectory() + File.separator + "test", System.currentTimeMillis() + ".mp4");
+        File file = new File(
+                Environment.getExternalStorageDirectory() + File.separator + "test",
+                System.currentTimeMillis() + ".mp4");
         if (!file.getParentFile().exists()) {
             file.getParentFile().mkdirs();
         }
@@ -243,6 +278,129 @@ public class ScreenCapture {
     public interface OnMediaProjectionReadyListener {
         void onMediaProjectionReady(MediaProjection mediaProjection);
     }
+
+    /**
+     * 用户发送音频帧数据
+     */
+    private class AudioFrameSender implements Runnable {
+        // ----- accessed by multiple threads -----
+        private volatile AudioFrameHandler mHandler;
+        private final Object mReadyFence = new Object();      // guards ready/running
+        private boolean mReady;
+        private boolean mRunning;
+
+        @Override
+        public void run() {
+            // Establish a Looper for this thread, and define a Handler for it.
+            Looper.prepare();
+            synchronized(mReadyFence) {
+                mHandler = new AudioFrameHandler(this);
+                mReady = true;
+                mReadyFence.notify();
+            }
+            Looper.loop();
+
+            Log.d(TAG, "AudioFrameSender thread exiting");
+            synchronized(mReadyFence) {
+                mReady = mRunning = false;
+                mHandler = null;
+            }
+        }
+
+        /**
+         * 这个Sender必须先start才能发送音频帧
+         */
+        public void start() {
+            Log.d(TAG, "AudioFrameSender: startRecording()");
+            synchronized(mReadyFence) {
+                if (mRunning) {
+                    Log.w(TAG, "AudioFrameSender thread already running");
+                    return;
+                }
+                mRunning = true;
+                new Thread(this, "AudioFrameSender").start();
+                while (!mReady) {
+                    try {
+                        mReadyFence.wait();
+                    } catch (InterruptedException ie) {
+                        // ignore
+                    }
+                }
+            }
+        }
+
+        public boolean isRunning() {
+            return mRunning;
+        }
+
+        public void stop() {
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_STOP));
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_QUIT));
+        }
+
+        /**
+         * 发送AudioFrame到编码器
+         */
+        public void sendAudioFrame(ByteBuffer buffer, int size, boolean endOfStream) {
+            synchronized(mReadyFence) {
+                if (!mReady) {
+                    return;
+                }
+            }
+
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_SEND_AUDIO_FRAME, size, endOfStream ? 1 : 0, buffer));
+        }
+
+        private void handleSendAudioFrame(ByteBuffer buffer, int size, boolean endOfStream) {
+            if (mRecorder.isRecording()) {
+                mRecorder.audioFrameAvailable(buffer, size, endOfStream);
+            }
+        }
+    }
+
+    /**
+     * Handles encoder state change requests.  The handler is created on the encoder thread.
+     */
+    private static class AudioFrameHandler extends Handler {
+        private WeakReference<AudioFrameSender> mWeakSender;
+
+        AudioFrameHandler(AudioFrameSender sender) {
+            mWeakSender = new WeakReference<>(sender);
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+            int what = msg.what;
+            Object obj = msg.obj;
+
+            AudioFrameSender frameSender = mWeakSender.get();
+            if (frameSender == null) {
+                Log.w(TAG, "AudioFrameSender.handleMessage: frameSender is null");
+                return;
+            }
+            switch (what) {
+                case MSG_SEND_AUDIO_FRAME:
+                    frameSender.handleSendAudioFrame((ByteBuffer) obj, msg.arg1, msg.arg2 == 1);
+                    break;
+                case MSG_STOP:
+                    Log.d(TAG, "send end of audio stream message");
+                    frameSender.handleSendAudioFrame((ByteBuffer) obj, msg.arg1, true);
+                    break;
+                case MSG_QUIT:
+                    Log.d(TAG, "Exit sender loop");
+                    Looper.myLooper().quit();
+                    break;
+                default:
+                    super.handleMessage(msg);
+                    break;
+            }
+
+        }
+    }
+
+
+
+    // Audio test
 
     private boolean initAudioRecord(int audioSource, int sampleRateInHz, int channelConfig, int audioFormat) {
         int minBufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
@@ -283,12 +441,8 @@ public class ScreenCapture {
                 Log.e(TAG, "Error ERROR_BAD_VALUE");
             } else {
                 ByteBuffer buf = ByteBuffer.wrap(mBuffer);
-                if (endOfStream) {
-                    Log.d(TAG, "AudioLoopExiting, add flag end of stream");
-                    mRecorder.audioFrameAvailable(buf, ret, true);
-                } else {
-                    mRecorder.audioFrameAvailable(buf, ret, false);
-                }
+                sendAudioFrame(buf, ret, endOfStream);
+                Log.d(TAG, "AudioLoopExiting, add flag end of stream");
             }
         }
     }
