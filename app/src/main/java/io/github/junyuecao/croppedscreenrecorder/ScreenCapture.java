@@ -5,7 +5,6 @@ import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT
 import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_DATA_FORMAT;
 import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_SAMPLE_RATE;
 import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.DEFAULT_SOURCE;
-import static io.github.junyuecao.croppedscreenrecorder.VideoEncoderCore.SAMPLES_PER_FRAME;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -26,6 +25,7 @@ import android.view.Surface;
 
 import java.io.File;
 import java.lang.ref.WeakReference;
+import java.nio.ByteBuffer;
 
 /**
  * Screen capture
@@ -40,6 +40,7 @@ import java.lang.ref.WeakReference;
 public class ScreenCapture {
     private static final String TAG = "ScreenCapture";
     public static final int CAPTURE_REQUEST_CODE = 110;
+    private static final int SAMPLES_PER_FRAME = 2048;
     private static ScreenCapture sInstance;
     private final WeakReference<Activity> mActivity;
     private final int mScreenDensity;
@@ -142,7 +143,7 @@ public class ScreenCapture {
                 cropTop, cropBottom, mBitRate, eglContext));
         mRecorder.setCallback(new TextureMovieEncoder.Callback() {
             @Override
-            public void onEncoderPrepared(Surface surface) {
+            public void onInputSurfacePrepared(Surface surface) {
                 virtualDisplay.setSurface(surface);
             }
         });
@@ -281,11 +282,12 @@ public class ScreenCapture {
             } else if (ret == AudioRecord.ERROR_BAD_VALUE) {
                 Log.e(TAG, "Error ERROR_BAD_VALUE");
             } else {
+                ByteBuffer buf = ByteBuffer.wrap(mBuffer);
                 if (endOfStream) {
                     Log.d(TAG, "AudioLoopExiting, add flag end of stream");
-                    mRecorder.audioFrameAvailable(mBuffer, ret, true);
+                    mRecorder.audioFrameAvailable(buf, ret, true);
                 } else {
-                    mRecorder.audioFrameAvailable(mBuffer, ret, false);
+                    mRecorder.audioFrameAvailable(buf, ret, false);
                 }
             }
         }
