@@ -1,25 +1,25 @@
 package io.github.junyuecao.croppedscreenrecorder;
 
 /**
- * 录制回调
+ * Record callback
  */
 public interface RecordCallback {
 
     /**
-     * 录制成功的回调
-     * @param filePath 录制后的文件路径
+     * Callback when record successfully
+     * @param filePath recorded MP4 file path
      */
     void onRecordSuccess(String filePath, String coverPath, long duration);
 
     /**
-     * 录制失败后的回调
-     * @param e 录制失败的原因
+     * Callback when record failed
+     * @param e reason why it failed
      */
     void onRecordFailed(Throwable e, long duration);
 
     /**
-     * 本次录制时长变化 注意：不在主线程执行
-     * @param ms 当前视频长度 毫秒
+     * Record progress changed
+     * @param ms current record duration in ms
      */
     void onRecordedDurationChanged(long ms);
 }

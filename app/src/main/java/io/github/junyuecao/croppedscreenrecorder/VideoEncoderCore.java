@@ -23,7 +23,6 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
-import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.support.annotation.RequiresApi;
@@ -33,6 +32,8 @@ import android.view.Surface;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * This class wraps up the core components used for surface-input video encoding.
@@ -49,25 +50,18 @@ public class VideoEncoderCore {
     private static final String TAG = "VideoEncoderCore";
     private static final boolean VERBOSE = true;
     private static final int TIMEOUT_USEC = 10000;
-    public static final int DEFAULT_SOURCE = MediaRecorder.AudioSource.MIC;
-    public static final int DEFAULT_SAMPLE_RATE = 44100;
-    public static final int DEFAULT_CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_DEFAULT;
+    public static final int DEFAULT_SAMPLE_RATE = 48000;
+    public static final int DEFAULT_CHANNEL_CONFIG = 1;
     public static final int DEFAULT_DATA_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
 
-    public static final int MAX_INPUT_SIZE = 2048;
+    public static final int MAX_INPUT_SIZE = 65536;
     private static final String VIDEO_MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC;    // H.264 Advanced Video Coding
     private static final String AUDIO_MIME_TYPE = MediaFormat.MIMETYPE_AUDIO_AAC;
-    /**
-     * fps
-     */
+    /** fps */
     private static final int FRAME_RATE = 24;
-    /**
-     * 5 seconds between I-frames
-     */
+    /** 5 seconds between I-frames */
     private static final int IFRAME_INTERVAL = 5;
-    /**
-     * Save path
-     */
+    /** Save path */
     private final String mPath;
 
     private Surface mInputSurface;
@@ -81,20 +75,29 @@ public class VideoEncoderCore {
     private boolean mMuxerStarted;
     private boolean mStreamEnded;
     private long mRecordStartedAt = 0;
-    private long mRecordDuration = 0;
 
     private RecordCallback mCallback;
     private Handler mMainHandler;
+    // is audio empty , if true, we should add a frame of audio data to the muxer
+    private boolean mIsAudioEmpty;
 
     private Runnable mRecordProgressChangeRunnable = new Runnable() {
+
         @Override
         public void run() {
             if (mCallback != null) {
-                mCallback.onRecordedDurationChanged(mRecordDuration);
+                mCallback.onRecordedDurationChanged(System.currentTimeMillis() - mRecordStartedAt);
             }
         }
     };
     private String mCoverPath;
+    private Timer mProgressTimer;
+    private TimerTask mProgressTask = new TimerTask() {
+        @Override
+        public void run() {
+            mMainHandler.post(mRecordProgressChangeRunnable);
+        }
+    };
 
     /**
      * Configures encoder and muxer state, and prepares the input Surface.
@@ -125,11 +128,11 @@ public class VideoEncoderCore {
         mInputSurface = mVideoEncoder.createInputSurface();
         mVideoEncoder.start();
 
-        MediaFormat audioFormat = MediaFormat.createAudioFormat(AUDIO_MIME_TYPE,
-                DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG);
+        MediaFormat audioFormat = MediaFormat.createAudioFormat(AUDIO_MIME_TYPE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNEL_CONFIG);
         audioFormat.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
         audioFormat.setInteger(MediaFormat.KEY_BIT_RATE, 128000);
         audioFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_SIZE);
+        mIsAudioEmpty = true;
 
         mAudioEncoder = MediaCodec.createEncoderByType(AUDIO_MIME_TYPE);
         mAudioEncoder.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -176,14 +179,27 @@ public class VideoEncoderCore {
             mAudioEncoder.release();
             mAudioEncoder = null;
         }
+        if (mProgressTimer != null) {
+            mProgressTimer.cancel();
+            mProgressTimer = null;
+        }
         if (mMuxer != null) {
             try {
+                if (mIsAudioEmpty) {
+                    // avoid empty audio track. if the audio track is empty , muxer.stop will failed
+                    byte[] bytes = new byte[2];
+                    ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                    mABufferInfo.set(0, 2, System.nanoTime() / 1000, 0);
+                    buffer.position(mABufferInfo.offset);
+                    buffer.limit(mABufferInfo.offset + mABufferInfo.size);
+                    mMuxer.writeSampleData(mATrackIndex, buffer, mABufferInfo);
+                }
                 mMuxer.stop();
                 if (mCallback != null) {
                     mMainHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            mCallback.onRecordSuccess(mPath, mCoverPath, mRecordDuration);
+                            mCallback.onRecordSuccess(mPath, mCoverPath, System.currentTimeMillis() - mRecordStartedAt);
                         }
                     });
                 }
@@ -193,7 +209,7 @@ public class VideoEncoderCore {
                     mMainHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            mCallback.onRecordFailed(e, mRecordDuration);
+                            mCallback.onRecordFailed(e, System.currentTimeMillis() - mRecordStartedAt);
                         }
                     });
                 }
@@ -252,7 +268,6 @@ public class VideoEncoderCore {
         drainAudio(endOfStream);
 
         if (mMuxerStarted && mCallback != null) {
-            mRecordDuration = System.currentTimeMillis() - mRecordStartedAt;
             mMainHandler.post(mRecordProgressChangeRunnable);
         }
     }
@@ -378,7 +393,7 @@ public class VideoEncoderCore {
                         out.position(mABufferInfo.offset);
                         out.limit(mABufferInfo.offset + mABufferInfo.size);
                         mMuxer.writeSampleData(mATrackIndex, out, mABufferInfo);
-
+                        mIsAudioEmpty = false;
                         if (VERBOSE) {
                             Log.d(TAG, "sent " + mABufferInfo.size + " audio bytes to muxer, ts=" +
                                     mABufferInfo.presentationTimeUs);
@@ -408,13 +423,13 @@ public class VideoEncoderCore {
     }
 
     /**
-     * Enqueue the audio frame buffers to the encoder, this should not be done in the same thread with encoder.
+     * Enqueue the audio frame buffers to the encoder
      *
      * @param buffer      the data
      * @param size        size of the data
      * @param endOfStream is this frame the end
      */
-    public void enqueueAudioFrame(ByteBuffer buffer, int size, boolean endOfStream) {
+    public void enqueueAudioFrame(ByteBuffer buffer, int size, long presentTimeUs, boolean endOfStream) {
         boolean done = false;
         while (!done) {
             // Start to put data to InputBuffer
@@ -441,7 +456,7 @@ public class VideoEncoderCore {
                 }
                 in.put(buffer); // Here we should ensure that `size` is smaller than the capacity of the `in` buffer
                 int flag = endOfStream ? MediaCodec.BUFFER_FLAG_END_OF_STREAM : 0;
-                mAudioEncoder.queueInputBuffer(index, 0, size, System.nanoTime() / 1000, flag);
+                mAudioEncoder.queueInputBuffer(index, 0, size, presentTimeUs, flag);
                 done = true; // Done passing the input to the codec, but still check for available output below
             } else if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 // if input buffers are full try to drain them
@@ -452,6 +467,17 @@ public class VideoEncoderCore {
         }
     }
 
+    /**
+     * Enqueue the audio frame buffers to the encoder
+     *
+     * @param buffer      the data
+     * @param size        size of the data
+     * @param endOfStream is this frame the end
+     */
+    public void enqueueAudioFrame(ByteBuffer buffer, int size, boolean endOfStream) {
+        enqueueAudioFrame(buffer, size, System.nanoTime() / 1000, endOfStream);
+    }
+
     private void tryStartMuxer() {
         if (mVTrackIndex != -1  // Video track is added
                 && mATrackIndex != -1 // and audio track is added
@@ -460,6 +486,8 @@ public class VideoEncoderCore {
             mMuxer.start();
             mMuxerStarted = true;
             mRecordStartedAt = System.currentTimeMillis();
+            mProgressTimer = new Timer();
+            mProgressTimer.schedule(mProgressTask, 0, 16);
         }
     }
 }

@@ -1,6 +1,5 @@
 package io.github.junyuecao.croppedscreenrecorder;
 
-import android.util.Log;
 import io.github.junyuecao.croppedscreenrecorder.gles.Drawable2d;
 
 import java.nio.ByteBuffer;
@@ -95,8 +94,6 @@ public class CroppedDrawable2d extends Drawable2d {
                 }
 
                 fb.put(i, fl);
-
-                Log.d(TAG, "getTexCoordArray: " + fl);
             }
 
             mRecalculate = false;

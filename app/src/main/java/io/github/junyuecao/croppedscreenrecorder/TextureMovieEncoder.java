@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 
+
 /**
  * Encode a movie from frames rendered from an external texture image.
  * <p>
@@ -158,6 +159,12 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      * has completed).
      */
     public void stopRecording() {
+        synchronized(mReadyFence) {
+            if (!mReady) {
+                return;
+            }
+        }
+
         mHandler.removeCallbacks(mUpdate);
         mHandler.sendMessage(mHandler.obtainMessage(MSG_STOP_RECORDING));
         mHandler.sendMessage(mHandler.obtainMessage(MSG_QUIT));
@@ -181,6 +188,14 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         mHandler.sendMessage(mHandler.obtainMessage(MSG_UPDATE_SHARED_CONTEXT, sharedContext));
     }
 
+
+    /**
+     * @see #frameAvailable(SurfaceTexture, long)
+     */
+    public void frameAvailable(SurfaceTexture st) {
+        frameAvailable(st, st.getTimestamp());
+    }
+
     /**
      * Tells the video recorder that a new frame is available.  (Call from non-encoder thread.)
      * <p>
@@ -189,12 +204,12 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
      * can get away with it so long as the input frame rate is reasonable and the encoder
      * thread doesn't stall.
      * <p>
-     * TODO: either block here until the texture has been rendered onto the encoder surface,
      * or have a separate "block if still busy" method that the caller can execute immediately
      * before it calls updateTexImage().  The latter is preferred because we don't want to
      * stall the caller while this thread does work.
+     * @param timestamp present timestamp in nanosecond
      */
-    public void frameAvailable(SurfaceTexture st) {
+    public void frameAvailable(SurfaceTexture st, long timestamp) {
         synchronized(mReadyFence) {
             if (!mReady) {
                 return;
@@ -205,7 +220,6 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
             mTransform = new float[16];
         }
         st.getTransformMatrix(mTransform);
-        long timestamp = st.getTimestamp();
         if (timestamp == 0) {
             // Seeing this after device is toggled off/on with power button.  The
             // first frame back has a zero timestamp.
@@ -309,33 +323,34 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
             drawBox(mFrameNum++);
         }
 
-        saveFirstFrame();
+        // used for save a frame
+        // saveFirstFrame();
 
         mInputWindowSurface.setPresentationTime(timestampNanos);
         mInputWindowSurface.swapBuffers();
     }
 
-    private void saveFirstFrame() {
-        // if (mFirstFrameSaved) {
-        //     return;
-        // }
-        // int width = mInputWindowSurface.getWidth();
-        // int height = mInputWindowSurface.getHeight();
-        // ByteBuffer buf = ByteBuffer.allocateDirect(width * height * 4);
-        // buf.order(ByteOrder.LITTLE_ENDIAN);
-        // buf.rewind();
-        // GLES20.glReadPixels(0, 0, width, height,
-        //         GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf);
-        // new Thread(new ImageSaverThread(buf, mCoverImageFile, width, height)).start();
-        // mVideoEncoder.setCoverPath(mCoverImageFile.getAbsolutePath());
-        //
-        // mFirstFrameSaved = true; // 已经保存
-    }
+    // private void saveFirstFrame() {
+    //     if (mFirstFrameSaved) {
+    //         return;
+    //     }
+    //     int width = mInputWindowSurface.getWidth();
+    //     int height = mInputWindowSurface.getHeight();
+    //     ByteBuffer buf = ByteBuffer.allocateDirect(width * height * 4);
+    //     buf.order(ByteOrder.LITTLE_ENDIAN);
+    //     buf.rewind();
+    //     GLES20.glReadPixels(0, 0, width, height,
+    //             GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf);
+    //     new Thread(new ImageSaverThread(buf, mCoverImageFile, width, height)).start();
+    //     mVideoEncoder.setCoverPath(mCoverImageFile.getAbsolutePath());
+    //
+    //     mFirstFrameSaved = true; // 已经保存
+    // }
 
     /**
-     * @param mp4 对应的mp4文件
      *
-     * @return 封面文件
+     * @param mp4 get screenshot file
+     * @return screenshot file
      */
     private File getCoverFile(@NonNull File mp4) {
         return new File(mp4.getParent(), "cover_" + mp4.getName().replace(".mp4", "") + ".jpg");
@@ -434,8 +449,6 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
 
     @Override
     public void onFrameAvailable(SurfaceTexture surfaceTexture) {
-        Log.d(TAG, "onFrameAvailable");
-
         mHandler.postDelayed(mUpdate, 16);
 
         frameAvailable(surfaceTexture);
@@ -487,7 +500,6 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
     public interface Callback {
         /**
          * Surface准备就绪
-         *
          * @param surface 准备好的surface
          */
         void onInputSurfacePrepared(Surface surface);
