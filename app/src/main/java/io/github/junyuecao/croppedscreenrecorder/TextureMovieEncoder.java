@@ -106,7 +106,7 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
     private float mBottomCropped;
     private float[] mTransform;
     private RecordCallback mRecordCallback;
-    // 表示是否已经保存第一帧截图
+    // Should save first frame as a cover
     private boolean mFirstFrameSaved;
     private int mVideoWidth;
     private int mVideoHeight;
@@ -499,8 +499,8 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
 
     public interface Callback {
         /**
-         * Surface准备就绪
-         * @param surface 准备好的surface
+         * called when surface prepared
+         * @param surface a prepared surface
          */
         void onInputSurfacePrepared(Surface surface);
     }
