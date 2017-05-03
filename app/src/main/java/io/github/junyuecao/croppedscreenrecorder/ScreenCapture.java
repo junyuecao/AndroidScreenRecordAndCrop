@@ -188,6 +188,10 @@ public class ScreenCapture {
         recording = false;
         mAudioLoopExited = true;
 
+        if (mAudioThread != null) {
+            mAudioThread.interrupt();
+            mAudioThread = null;
+        }
         if (mAudioRecord != null) {
             mAudioRecord.stop();
             mAudioRecord.release();
@@ -297,6 +301,10 @@ public class ScreenCapture {
             if (mBuffer == null) {
                 mBuffer = new byte[1024 * 2]; // prevent recreate buffer
             }
+            if (mAudioRecord == null) {
+                return;
+            }
+
             int ret = mAudioRecord.read(mBuffer, 0, mBuffer.length);
             if (ret == AudioRecord.ERROR_INVALID_OPERATION) {
                 Log.e(TAG, "Error ERROR_INVALID_OPERATION");
