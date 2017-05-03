@@ -26,7 +26,8 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 @RuntimePermissions
-public class MainActivity extends AppCompatActivity implements View.OnClickListener, View.OnTouchListener {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener, View.OnTouchListener,
+        RecordCallback {
 
     ScreenCapture mScreenCapture;
     Timer mTimer;
@@ -75,6 +76,21 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             }
         }
         return false;
+    }
+
+    @Override
+    public void onRecordSuccess(String filePath, String coverPath, long duration) {
+        Toast.makeText(this, "Record successfully: " + filePath, Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onRecordFailed(Throwable e, long duration) {
+        Toast.makeText(this, "Record failed with error : " + e.getMessage(), Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onRecordedDurationChanged(long ms) {
+        // We don't need it yet
     }
 
     @Override
@@ -139,6 +155,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 mStart.setVisibility(View.GONE);
             }
         });
+        mScreenCapture.setRecordCallback(this);
         mScreenCapture.requestScreenCapture();
     }
 
