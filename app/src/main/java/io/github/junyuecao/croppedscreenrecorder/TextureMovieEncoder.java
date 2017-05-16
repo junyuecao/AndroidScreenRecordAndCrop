@@ -166,8 +166,10 @@ public class TextureMovieEncoder implements Runnable, SurfaceTexture.OnFrameAvai
         }
 
         mHandler.removeCallbacks(mUpdate);
-        mHandler.sendMessage(mHandler.obtainMessage(MSG_STOP_RECORDING));
-        mHandler.sendMessage(mHandler.obtainMessage(MSG_QUIT));
+        synchronized(this) {
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_STOP_RECORDING));
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_QUIT));
+        }
         // We don't know when these will actually finish (or even start).  We don't want to
         // delay the UI thread though, so we return immediately.
     }
